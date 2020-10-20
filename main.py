@@ -9,7 +9,7 @@ from typing import List, Dict
 from wordcloud import WordCloud, STOPWORDS
 
 
-def save_script(module: Dict[str, int, str]):
+def save_script(module):
     """
     Save all script files on module directory
     :param module: A dict returned from Wikimedia API
@@ -20,16 +20,16 @@ def save_script(module: Dict[str, int, str]):
         file.write(module.wikitext)
 
 
-def save_metainfo(pages: List[Dict[str, int, int]], pages_error: List[int]):
+def save_metainfo(pages: List[Dict], pages_error: List[int]):
     """
     Save a python object with pickle module to a file
     :param pages: A list of page info
     :param pages_error: A list of pageid where errors occurred
     """
-    with open("pages_size.dat", "wb") as file:
-        pickle.dump(pages, file)
-    with open("pages_error.dat", "wb") as file:
-        pickle.dump(pages_error, file)
+    with open("pages.dat", "wb") as f:
+        pickle.dump(pages, f)
+    with open("pages_error.dat", "wb") as f:
+        pickle.dump(pages_error, f)
 
 
 def get_info_from_files() -> List[Dict[str, int]]:
@@ -44,7 +44,7 @@ def get_info_from_files() -> List[Dict[str, int]]:
     return arr
 
 
-def get_pages() -> [List[Dict[str, int, int], List[int]]]:
+def get_pages() -> [List[Dict], List[int]]:
     """
     Get all lua modules from the Wiki, exclude doc pages
     :return: A list of page info and list of pageids where errors occurred
@@ -82,7 +82,7 @@ def make_graphics(pages):
     df = pd.DataFrame.from_dict(pages)
     stopwords = set(STOPWORDS)
     stopwords.update(["module", "Module", "ISO"])
-    px.histogram(df, x='size').write_html("histogram.html")
+    px.histogram(df, x='size', labels={'x': "lua module size (bytes)", 'y': "Count Files"}).write_html("histogram.html")
     words = WordCloud(background_color='white',
                       width=1024,
                       height=512,

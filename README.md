@@ -1,5 +1,6 @@
 # Wikimedia Microtask
 ## Usage
+**if you don't want to wait for all API queries, just rename pages_backup.dat to pages.dat**
 - With *pip*
 ```
 pip3 install -r requirements.txt
