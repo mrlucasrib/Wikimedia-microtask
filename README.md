@@ -1,6 +1,9 @@
 # Wikimedia Microtask
 ## Usage
-**if you don't want to wait for all API queries, just rename pages_backup.dat to pages.dat**
+**if you don't want to wait for all API queries, just rename pages_backup.dat to pages.dat**.
+(page.dat is a dict with title, pageid, and size of module lua).
+
+If there is a module folder it will look for the file size there
 - With *pip*
 ```
 pip3 install -r requirements.txt

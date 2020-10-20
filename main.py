@@ -26,7 +26,7 @@ def save_metainfo(pages: List[Dict], pages_error: List[int]):
     :param pages: A list of page info
     :param pages_error: A list of pageid where errors occurred
     """
-    with open("pages.dat", "wb") as f:
+    with open("pages2.dat", "wb") as f:
         pickle.dump(pages, f)
     with open("pages_error.dat", "wb") as f:
         pickle.dump(pages_error, f)
@@ -63,7 +63,7 @@ def get_pages() -> [List[Dict], List[int]]:
                     for module in site.iterate("parse", pageid=page.pageid, prop="wikitext"):
                         data = {'title': module.title, 'pageid': module.pageid, 'size': len(module.wikitext)}
                         pages.append(data)
-                        print(f"{module.title} successfully added")
+                        # print(f"{module.title} successfully added")
                         save_script(module)
                         # Wait 1 second
                         time.sleep(1)
@@ -96,8 +96,8 @@ def make_graphics(pages):
 # Main
 if __name__ == '__main__':
     pages = []
-    if os.path.isfile('pages_size.dat'):
-        with open("pages_size.dat", "rb") as file:
+    if os.path.isfile("pages.dat"):
+        with open("pages.dat", "rb") as file:
             pages = pickle.load(file)
     elif os.path.isdir("module"):
         pages = get_info_from_files()
