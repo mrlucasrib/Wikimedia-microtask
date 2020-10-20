@@ -63,7 +63,7 @@ def get_pages() -> [List[Dict], List[int]]:
                     for module in site.iterate("parse", pageid=page.pageid, prop="wikitext"):
                         data = {'title': module.title, 'pageid': module.pageid, 'size': len(module.wikitext)}
                         pages.append(data)
-                        # print(f"{module.title} successfully added")
+                        print(f"{module.title} successfully added")
                         save_script(module)
                         # Wait 1 second
                         time.sleep(1)
