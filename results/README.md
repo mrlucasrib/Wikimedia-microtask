@@ -1,5 +1,5 @@
 ## Results
-The first graph is a histogram, which was made in HTML to be more interactive and informative. It can be found in this folder but can also be seen on github pages via this link.
+The first graph is a histogram, which was made in HTML to be more interactive and informative. It can be found in this folder but can also be seen on github pages via this link: https://mrlucasrib.github.io/Wikimedia-microtask/histogram.html.
 
 The second is a word cloud with the module names, so you can see in a visual way the number of modules with the same functionality.
 
