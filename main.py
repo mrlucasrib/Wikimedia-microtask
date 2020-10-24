@@ -26,7 +26,7 @@ def save_metainfo(pages: List[Dict], pages_error: List[int]):
     :param pages: A list of page info
     :param pages_error: A list of pageid where errors occurred
     """
-    with open("pages2.dat", "wb") as f:
+    with open("pages.dat", "wb") as f:
         pickle.dump(pages, f)
     with open("pages_error.dat", "wb") as f:
         pickle.dump(pages_error, f)
@@ -51,14 +51,18 @@ def get_pages() -> [List[Dict], List[int]]:
     """
     site = wikipedia('en')
     pages = []
+    modules_names = []
     error_pages = []
     # Asks 500 (max) per iteration lua modules pages for api
     for r in site.query(list='allpages', apnamespace="828", aplimit="max"):
         # Iterates in the results
         for page in r.allpages:
             # Check if a documentation file
-            if "/doc" != page.title[-4:]:
+            if "/doc" not in page.title and "testcase" not in page.title and "Module:User:" not in page.title \
+                    and page.title.split("/")[0] not in modules_names:
                 try:
+                    # Not search submodules
+                    modules_names.append(page.title.split("/")[0])
                     # Get module lua content
                     for module in site.iterate("parse", pageid=page.pageid, prop="wikitext"):
                         data = {'title': module.title, 'pageid': module.pageid, 'size': len(module.wikitext)}
@@ -82,7 +86,8 @@ def make_graphics(pages):
     df = pd.DataFrame.from_dict(pages)
     stopwords = set(STOPWORDS)
     stopwords.update(["module", "Module", "ISO"])
-    px.histogram(df, x='size', labels={'x': "lua module size (bytes)", 'y': "Count Files"}).write_html("histogram.html")
+    px.histogram(df, x='size', labels={'x': "lua module size (bytes)", 'y': "Count Files"}).write_html(
+        "results/histogram.html")
     words = WordCloud(background_color='white',
                       width=1024,
                       height=512,
@@ -90,7 +95,7 @@ def make_graphics(pages):
                       ).generate(' '.join(df['title']))
     plt.imshow(words)
     plt.axis('off')
-    plt.savefig('World_Cloud_module_name.png')
+    plt.savefig('results/World_Cloud_module_name.png')
 
 
 # Main

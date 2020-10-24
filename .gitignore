@@ -1,5 +1,5 @@
-module
-module2
+results/module
+results/module2
 Pipfile.lock
-histogram.html
-World_Cloud_module_name.png
+results/histogram.html
+results/World_Cloud_module_name.png
