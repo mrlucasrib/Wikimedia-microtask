@@ -1,0 +1,2573 @@
+-- Original module located at [[:en:Module:Wd]] and [[:en:Module:Wd/i18n]].
+
+local p = {}
+local arg = ...
+local i18n
+
+local function loadI18n(aliasesP, frame)
+	local title
+
+	if frame then
+		-- current module invoked by page/template, get its title from frame
+		title = frame:getTitle()
+	else
+		-- current module included by other module, get its title from ...
+		title = arg
+	end
+
+	if not i18n then
+		i18n = require(title .. "/i18n").init(aliasesP)
+	end
+end
+
+p.claimCommands = {
+	property   = "property",
+	properties = "properties",
+	qualifier  = "qualifier",
+	qualifiers = "qualifiers",
+	reference  = "reference",
+	references = "references"
+}
+
+p.generalCommands = {
+	label       = "label",
+	title       = "title",
+	description = "description",
+	alias       = "alias",
+	aliases     = "aliases",
+	badge       = "badge",
+	badges      = "badges"
+}
+
+p.flags = {
+	linked        = "linked",
+	short         = "short",
+	raw           = "raw",
+	multilanguage = "multilanguage",
+	unit          = "unit",
+	-------------
+	preferred     = "preferred",
+	normal        = "normal",
+	deprecated    = "deprecated",
+	best          = "best",
+	future        = "future",
+	current       = "current",
+	former        = "former",
+	edit          = "edit",
+	editAtEnd     = "edit@end",
+	mdy           = "mdy",
+	single        = "single",
+	sourced       = "sourced"
+}
+
+p.args = {
+	eid  = "eid",
+	page = "page",
+	date = "date"
+}
+
+local aliasesP = {
+	coord                   = "P625",
+	-----------------------
+	image                   = "P18",
+	author                  = "P50",
+	publisher               = "P123",
+	importedFrom            = "P143",
+	statedIn                = "P248",
+	pages                   = "P304",
+	language                = "P407",
+	hasPart                 = "P527",
+	publicationDate         = "P577",
+	startTime               = "P580",
+	endTime                 = "P582",
+	chapter                 = "P792",
+	retrieved               = "P813",
+	referenceURL            = "P854",
+	sectionVerseOrParagraph = "P958",
+	archiveURL              = "P1065",
+	title                   = "P1476",
+	formatterURL            = "P1630",
+	quote                   = "P1683",
+	shortName               = "P1813",
+	definingFormula         = "P2534",
+	archiveDate             = "P2960",
+	inferredFrom            = "P3452",
+	typeOfReference         = "P3865",
+	column                  = "P3903"
+}
+
+local aliasesQ = {
+	percentage              = "Q11229",
+	prolepticJulianCalendar = "Q1985786",
+	citeWeb                 = "Q5637226",
+	citeQ                   = "Q22321052"
+}
+
+local parameters = {
+	property  = "%p",
+	qualifier = "%q",
+	reference = "%r",
+	alias     = "%a",
+	badge     = "%b",
+	separator = "%s",
+	general   = "%x"
+}
+
+local formats = {
+	property              = "%p[%s][%r]",
+	qualifier             = "%q[%s][%r]",
+	reference             = "%r",
+	propertyWithQualifier = "%p[ <span style=\"font-size:85\\%\">(%q)</span>][%s][%r]",
+	alias                 = "%a[%s]",
+	badge                 = "%b[%s]"
+}
+
+local hookNames = {              -- {level_1, level_2}
+	[parameters.property]         = {"getProperty"},
+	[parameters.reference]        = {"getReferences", "getReference"},
+	[parameters.qualifier]        = {"getAllQualifiers"},
+	[parameters.qualifier.."\\d"] = {"getQualifiers", "getQualifier"},
+	[parameters.alias]            = {"getAlias"},
+	[parameters.badge]            = {"getBadge"}
+}
+
+-- default value objects, should NOT be mutated but instead copied
+local defaultSeparators = {
+	["sep"]      = {" "},
+	["sep%s"]    = {","},
+	["sep%q"]    = {"; "},
+	["sep%q\\d"] = {", "},
+	["sep%r"]    = nil,  -- none
+	["punc"]     = nil   -- none
+}
+
+local rankTable = {
+	["preferred"]  = 1,
+	["normal"]     = 2,
+	["deprecated"] = 3
+}
+
+local Config = {}
+
+-- allows for recursive calls
+function Config:new()
+	local cfg = {}
+	setmetatable(cfg, self)
+	self.__index = self
+
+	cfg.separators = {
+		-- single value objects wrapped in arrays so that we can pass by reference
+		["sep"]   = {copyTable(defaultSeparators["sep"])},
+		["sep%s"] = {copyTable(defaultSeparators["sep%s"])},
+		["sep%q"] = {copyTable(defaultSeparators["sep%q"])},
+		["sep%r"] = {copyTable(defaultSeparators["sep%r"])},
+		["punc"]  = {copyTable(defaultSeparators["punc"])}
+	}
+
+	cfg.entity = nil
+	cfg.entityID = nil
+	cfg.propertyID = nil
+	cfg.propertyValue = nil
+	cfg.qualifierIDs = {}
+	cfg.qualifierIDsAndValues = {}
+
+	cfg.bestRank = true
+	cfg.ranks = {true, true, false}  -- preferred = true, normal = true, deprecated = false
+	cfg.foundRank = #cfg.ranks
+	cfg.flagBest = false
+	cfg.flagRank = false
+
+	cfg.periods = {true, true, true}  -- future = true, current = true, former = true
+	cfg.flagPeriod = false
+	cfg.atDate = {parseDate(os.date('!%Y-%m-%d'))}  -- today as {year, month, day}
+
+	cfg.mdyDate = false
+	cfg.singleClaim = false
+	cfg.sourcedOnly = false
+	cfg.editable = false
+	cfg.editAtEnd = false
+
+	cfg.inSitelinks = false
+
+	cfg.langCode = mw.language.getContentLanguage().code
+	cfg.langName = mw.language.fetchLanguageName(cfg.langCode, cfg.langCode)
+	cfg.langObj = mw.language.new(cfg.langCode)
+
+	cfg.siteID = mw.wikibase.getGlobalSiteId()
+
+	cfg.states = {}
+	cfg.states.qualifiersCount = 0
+	cfg.curState = nil
+
+	cfg.prefetchedRefs = nil
+
+	return cfg
+end
+
+local State = {}
+
+function State:new(cfg, type)
+	local stt = {}
+	setmetatable(stt, self)
+	self.__index = self
+
+	stt.conf = cfg
+	stt.type = type
+
+	stt.results = {}
+
+	stt.parsedFormat = {}
+	stt.separator = {}
+	stt.movSeparator = {}
+	stt.puncMark = {}
+
+	stt.linked = false
+	stt.rawValue = false
+	stt.shortName = false
+	stt.anyLanguage = false
+	stt.unitOnly = false
+	stt.singleValue = false
+
+	return stt
+end
+
+local function replaceAlias(id)
+	if aliasesP[id] then
+		id = aliasesP[id]
+	end
+
+	return id
+end
+
+local function errorText(code, param)
+	local text = i18n["errors"][code]
+	if param then text = mw.ustring.gsub(text, "$1", param) end
+	return text
+end
+
+local function throwError(errorMessage, param)
+	error(errorText(errorMessage, param))
+end
+
+local function replaceDecimalMark(num)
+	return mw.ustring.gsub(num, "[.]", i18n['numeric']['decimal-mark'], 1)
+end
+
+local function padZeros(num, numDigits)
+	local numZeros
+	local negative = false
+
+	if num < 0 then
+		negative = true
+		num = num * -1
+	end
+
+	num = tostring(num)
+	numZeros = numDigits - num:len()
+
+	for _ = 1, numZeros do
+		num = "0"..num
+	end
+
+	if negative then
+		num = "-"..num
+	end
+
+	return num
+end
+
+local function replaceSpecialChar(chr)
+	if chr == '_' then
+		-- replace underscores with spaces
+		return ' '
+	else
+		return chr
+	end
+end
+
+local function replaceSpecialChars(str)
+	local chr
+	local esc = false
+	local strOut = ""
+
+	for i = 1, #str do
+		chr = str:sub(i,i)
+
+		if not esc then
+			if chr == '\\' then
+				esc = true
+			else
+				strOut = strOut .. replaceSpecialChar(chr)
+			end
+		else
+			strOut = strOut .. chr
+			esc = false
+		end
+	end
+
+	return strOut
+end
+
+local function buildWikilink(target, label)
+	if not label or target == label then
+		return "[[" .. target .. "]]"
+	else
+		return "[[" .. target .. "|" .. label .. "]]"
+	end
+end
+
+-- used to make frame.args mutable, to replace #frame.args (which is always 0)
+-- with the actual amount and to simply copy tables
+function copyTable(tIn)
+	if not tIn then
+		return nil
+	end
+
+	local tOut = {}
+
+	for i, v in pairs(tIn) do
+		tOut[i] = v
+	end
+
+	return tOut
+end
+
+-- used to merge output arrays together;
+-- note that it currently mutates the first input array
+local function mergeArrays(a1, a2)
+	for i = 1, #a2 do
+		a1[#a1 + 1] = a2[i]
+	end
+
+	return a1
+end
+
+local function split(str, del)
+	local out = {}
+	local i, j = str:find(del)
+
+	if i and j then
+		out[1] = str:sub(1, i - 1)
+		out[2] = str:sub(j + 1)
+	else
+		out[1] = str
+	end
+
+	return out
+end
+
+local function parseWikidataURL(url)
+	local id
+
+	if url:match('^http[s]?://') then
+		id = split(url, "Q")
+
+		if id[2] then
+			return "Q" .. id[2]
+		end
+	end
+
+	return nil
+end
+
+function parseDate(dateStr, precision)
+	precision = precision or "d"
+
+	local i, j, index, ptr
+	local parts = {nil, nil, nil}
+
+	if dateStr == nil then
+		return parts[1], parts[2], parts[3]  -- year, month, day
+	end
+
+	-- 'T' for snak values, '/' for outputs with '/Julian' attached
+	i, j = dateStr:find("[T/]")
+
+	if i then
+		dateStr = dateStr:sub(1, i-1)
+	end
+
+	local from = 1
+
+	if dateStr:sub(1,1) == "-" then
+		-- this is a negative number, look further ahead
+		from = 2
+	end
+
+	index = 1
+	ptr = 1
+
+	i, j = dateStr:find("-", from)
+
+	if i then
+		-- year
+		parts[index] = tonumber(mw.ustring.gsub(dateStr:sub(ptr, i-1), "^\+(.+)$", "%1"), 10)  -- remove '+' sign (explicitly give base 10 to prevent error)
+
+		if parts[index] == -0 then
+			parts[index] = tonumber("0")  -- for some reason, 'parts[index] = 0' may actually store '-0', so parse from string instead
+		end
+
+		if precision == "y" then
+			-- we're done
+			return parts[1], parts[2], parts[3]  -- year, month, day
+		end
+
+		index = index + 1
+		ptr = i + 1
+
+		i, j = dateStr:find("-", ptr)
+
+		if i then
+			-- month
+			parts[index] = tonumber(dateStr:sub(ptr, i-1), 10)
+
+			if precision == "m" then
+				-- we're done
+				return parts[1], parts[2], parts[3]  -- year, month, day
+			end
+
+			index = index + 1
+			ptr = i + 1
+		end
+	end
+
+	if dateStr:sub(ptr) ~= "" then
+		-- day if we have month, month if we have year, or year
+		parts[index] = tonumber(dateStr:sub(ptr), 10)
+	end
+
+	return parts[1], parts[2], parts[3]  -- year, month, day
+end
+
+local function datePrecedesDate(aY, aM, aD, bY, bM, bD)
+	if aY == nil or bY == nil then
+		return nil
+	end
+	aM = aM or 1
+	aD = aD or 1
+	bM = bM or 1
+	bD = bD or 1
+
+	if aY < bY then
+		return true
+	end
+
+	if aY > bY then
+		return false
+	end
+
+	if aM < bM then
+		return true
+	end
+
+	if aM > bM then
+		return false
+	end
+
+	if aD < bD then
+		return true
+	end
+
+	return false
+end
+
+local function getHookName(param, index)
+	if hookNames[param] then
+		return hookNames[param][index]
+	elseif param:len() > 2 then
+		return hookNames[param:sub(1, 2).."\\d"][index]
+	else
+		return nil
+	end
+end
+
+local function alwaysTrue()
+	return true
+end
+
+-- The following function parses a format string.
+--
+-- The example below shows how a parsed string is structured in memory.
+-- Variables other than 'str' and 'child' are left out for clarity's sake.
+--
+-- Example:
+-- "A %p B [%s[%q1]] C [%r] D"
+--
+-- Structure:
+-- [
+--   {
+--     str = "A "
+--   },
+--   {
+--     str = "%p"
+--   },
+--   {
+--     str = " B ",
+--     child =
+--     [
+--       {
+--         str = "%s",
+--         child =
+--         [
+--           {
+--             str = "%q1"
+--           }
+--         ]
+--       }
+--     ]
+--   },
+--   {
+--     str = " C ",
+--     child =
+--     [
+--       {
+--         str = "%r"
+--       }
+--     ]
+--   },
+--   {
+--     str = " D"
+--   }
+-- ]
+--
+local function parseFormat(str)
+	local chr, esc, param, root, cur, prev, new
+	local params = {}
+
+	local function newObject(array)
+		local obj = {}  -- new object
+		obj.str = ""
+
+		array[#array + 1] = obj  -- array{object}
+		obj.parent = array
+
+		return obj
+	end
+
+	local function endParam()
+		if param > 0 then
+			if cur.str ~= "" then
+				cur.str = "%"..cur.str
+				cur.param = true
+				params[cur.str] = true
+				cur.parent.req[cur.str] = true
+				prev = cur
+				cur = newObject(cur.parent)
+			end
+			param = 0
+		end
+	end
+
+	root = {}  -- array
+	root.req = {}
+	cur = newObject(root)
+	prev = nil
+
+	esc = false
+	param = 0
+
+	for i = 1, #str do
+		chr = str:sub(i,i)
+
+		if not esc then
+			if chr == '\\' then
+				endParam()
+				esc = true
+			elseif chr == '%' then
+				endParam()
+				if cur.str ~= "" then
+					cur = newObject(cur.parent)
+				end
+				param = 2
+			elseif chr == '[' then
+				endParam()
+				if prev and cur.str == "" then
+					table.remove(cur.parent)
+					cur = prev
+				end
+				cur.child = {}  -- new array
+				cur.child.req = {}
+				cur.child.parent = cur
+				cur = newObject(cur.child)
+			elseif chr == ']' then
+				endParam()
+				if cur.parent.parent then
+					new = newObject(cur.parent.parent.parent)
+					if cur.str == "" then
+						table.remove(cur.parent)
+					end
+					cur = new
+				end
+			else
+				if param > 1 then
+					param = param - 1
+				elseif param == 1 then
+					if not chr:match('%d') then
+						endParam()
+					end
+				end
+
+				cur.str = cur.str .. replaceSpecialChar(chr)
+			end
+		else
+			cur.str = cur.str .. chr
+			esc = false
+		end
+
+		prev = nil
+	end
+
+	endParam()
+
+	-- make sure that at least one required parameter has been defined
+	if not next(root.req) then
+		throwError("missing-required-parameter")
+	end
+
+	-- make sure that the separator parameter "%s" is not amongst the required parameters
+	if root.req[parameters.separator] then
+		throwError("extra-required-parameter", parameters.separator)
+	end
+
+	return root, params
+end
+
+local function sortOnRank(claims)
+	local rankPos
+	local ranks = {{}, {}, {}, {}}  -- preferred, normal, deprecated, (default)
+	local sorted = {}
+
+	for _, v in ipairs(claims) do
+		rankPos = rankTable[v.rank] or 4
+		ranks[rankPos][#ranks[rankPos] + 1] = v
+	end
+
+	sorted = ranks[1]
+	sorted = mergeArrays(sorted, ranks[2])
+	sorted = mergeArrays(sorted, ranks[3])
+
+	return sorted
+end
+
+-- if id == nil then item connected to current page is used
+function Config:getLabel(id, raw, link, short)
+	local label = nil
+	local title = nil
+	local prefix= ""
+
+	if not id then
+		id = mw.wikibase.getEntityIdForCurrentPage()
+
+		if not id then
+			return ""
+		end
+	end
+
+	id = id:upper()  -- just to be sure
+
+	if raw then
+		-- check if given id actually exists
+		if mw.wikibase.isValidEntityId(id) and mw.wikibase.entityExists(id) then
+			label = id
+
+			if id:sub(1,1) == "P" then
+				prefix = "Property:"
+			end
+		end
+
+		prefix = "d:" .. prefix
+
+		title = label  -- may be nil
+	else
+		-- try short name first if requested
+		if short then
+			label = p._property{aliasesP.shortName, [p.args.eid] = id}  -- get short name
+
+			if label == "" then
+				label = nil
+			end
+		end
+
+		-- get label
+		if not label then
+			label = mw.wikibase.getLabelByLang(id, self.langCode)
+		end
+	end
+
+	if not label then
+		label = ""
+	elseif link then
+		-- build a link if requested
+		if not title then
+			if id:sub(1,1) == "Q" then
+				title = mw.wikibase.getSitelink(id)
+			elseif id:sub(1,1) == "P" then
+				-- properties have no sitelink, link to Wikidata instead
+				title = id
+				prefix = "d:Property:"
+			end
+		end
+
+		if title then
+			label = buildWikilink(prefix .. title, label)
+		end
+	end
+
+	return label
+end
+
+function Config:getEditIcon()
+	local value = ""
+	local prefix = ""
+	local front = "&nbsp;"
+	local back = ""
+
+	if self.entityID:sub(1,1) == "P" then
+		prefix = "Property:"
+	end
+
+	if self.editAtEnd then
+		front = '<span style="float:'
+
+		if self.langObj:isRTL() then
+			front = front .. 'left'
+		else
+			front = front .. 'right'
+		end
+
+		front = front .. '">'
+		back = '</span>'
+	end
+
+	value = "[[File:OOjs UI icon edit-ltr-progressive.svg|frameless|text-top|10px|alt=" .. i18n['info']['edit-on-wikidata'] .. "|link=https://www.wikidata.org/wiki/" .. prefix .. self.entityID .. "?uselang=" .. self.langCode
+
+	if self.propertyID then
+		value = value .. "#" .. self.propertyID
+	elseif self.inSitelinks then
+		value = value .. "#sitelinks-wikipedia"
+	end
+
+	value = value .. "|" .. i18n['info']['edit-on-wikidata'] .. "]]"
+
+	return front .. value .. back
+end
+
+-- used to create the final output string when it's all done, so that for references the
+-- function extensionTag("ref", ...) is only called when they really ended up in the final output
+function Config:concatValues(valuesArray)
+	local outString = ""
+	local j, skip
+
+	for i = 1, #valuesArray do
+		-- check if this is a reference
+		if valuesArray[i].refHash then
+			j = i - 1
+			skip = false
+
+			-- skip this reference if it is part of a continuous row of references that already contains the exact same reference
+			while valuesArray[j] and valuesArray[j].refHash do
+				if valuesArray[i].refHash == valuesArray[j].refHash then
+					skip = true
+					break
+				end
+				j = j - 1
+			end
+
+			if not skip then
+				-- add <ref> tag with the reference's hash as its name (to deduplicate references)
+				outString = outString .. mw.getCurrentFrame():extensionTag("ref", valuesArray[i][1], {name = valuesArray[i].refHash})
+			end
+		else
+			outString = outString .. valuesArray[i][1]
+		end
+	end
+
+	return outString
+end
+
+function Config:convertUnit(unit, raw, link, short, unitOnly)
+	local space = " "
+	local label = ""
+	local itemID
+
+	if unit == "" or unit == "1" then
+		return nil
+	end
+
+	if unitOnly then
+		space = ""
+	end
+
+	itemID = parseWikidataURL(unit)
+
+	if itemID then
+		if itemID == aliasesQ.percentage then
+			return "%"
+		else
+			label = self:getLabel(itemID, raw, link, short)
+
+			if label ~= "" then
+				return space .. label
+			end
+		end
+	end
+
+	return ""
+end
+
+function State:getValue(snak)
+	return self.conf:getValue(snak, self.rawValue, self.linked, self.shortName, self.anyLanguage, self.unitOnly, false, self.type:sub(1,2))
+end
+
+function Config:getValue(snak, raw, link, short, anyLang, unitOnly, noSpecial, type)
+	if snak.snaktype == 'value' then
+		local datatype = snak.datavalue.type
+		local subtype = snak.datatype
+		local datavalue = snak.datavalue.value
+
+		if datatype == 'string' then
+			if subtype == 'url' and link then
+				-- create link explicitly
+				if raw then
+					-- will render as a linked number like [1]
+					return "[" .. datavalue .. "]"
+				else
+					return "[" .. datavalue .. " " .. datavalue .. "]"
+				end
+			elseif subtype == 'commonsMedia' then
+				if link then
+					return buildWikilink("c:File:" .. datavalue, datavalue)
+				elseif not raw then
+					return "[[File:" .. datavalue .. "]]"
+				else
+					return datavalue
+				end
+			elseif subtype == 'geo-shape' and link then
+				return buildWikilink("c:" .. datavalue, datavalue)
+			elseif subtype == 'math' and not raw then
+				local attribute = nil
+
+				if (type == parameters.property or (type == parameters.qualifier and self.propertyID == aliasesP.hasPart)) and snak.property == aliasesP.definingFormula then
+					attribute = {qid = self.entityID}
+				end
+
+				return mw.getCurrentFrame():extensionTag("math", datavalue, attribute)
+			elseif subtype == 'external-id' and link then
+				local url = p._property{aliasesP.formatterURL, [p.args.eid] = snak.property}  -- get formatter URL
+
+				if url ~= "" then
+					url = mw.ustring.gsub(url, "$1", datavalue)
+					return "[" .. url .. " " .. datavalue .. "]"
+				else
+					return datavalue
+				end
+			else
+				return datavalue
+			end
+		elseif datatype == 'monolingualtext' then
+			if anyLang or datavalue['language'] == self.langCode then
+				return datavalue['text']
+			else
+				return nil
+			end
+		elseif datatype == 'quantity' then
+			local value = ""
+			local unit
+
+			if not unitOnly then
+				-- get value and strip + signs from front
+				value = mw.ustring.gsub(datavalue['amount'], "^\+(.+)$", "%1")
+
+				if raw then
+					return value
+				end
+
+				-- replace decimal mark based on locale
+				value = replaceDecimalMark(value)
+
+				-- add delimiters for readability
+				value = i18n.addDelimiters(value)
+			end
+
+			unit = self:convertUnit(datavalue['unit'], raw, link, short, unitOnly)
+
+			if unit then
+				value = value .. unit
+			end
+
+			return value
+		elseif datatype == 'time' then
+			local y, m, d, p, yDiv, yRound, yFull, value, calendarID, dateStr
+			local yFactor = 1
+			local sign = 1
+			local prefix = ""
+			local suffix = ""
+			local mayAddCalendar = false
+			local calendar = ""
+			local precision = datavalue['precision']
+
+			if precision == 11 then
+				p = "d"
+			elseif precision == 10 then
+				p = "m"
+			else
+				p = "y"
+				yFactor = 10^(9-precision)
+			end
+
+			y, m, d = parseDate(datavalue['time'], p)
+
+			if y < 0 then
+				sign = -1
+				y = y * sign
+			end
+
+			-- if precision is tens/hundreds/thousands/millions/billions of years
+			if precision <= 8 then
+				yDiv = y / yFactor
+
+				-- if precision is tens/hundreds/thousands of years
+				if precision >= 6 then
+					mayAddCalendar = true
+
+					if precision <= 7 then
+						-- round centuries/millenniums up (e.g. 20th century or 3rd millennium)
+						yRound = math.ceil(yDiv)
+
+						if not raw then
+							if precision == 6 then
+								suffix = i18n['datetime']['suffixes']['millennium']
+							else
+								suffix = i18n['datetime']['suffixes']['century']
+							end
+
+							suffix = i18n.getOrdinalSuffix(yRound) .. suffix
+						else
+							-- if not verbose, take the first year of the century/millennium
+							-- (e.g. 1901 for 20th century or 2001 for 3rd millennium)
+							yRound = (yRound - 1) * yFactor + 1
+						end
+					else
+						-- precision == 8
+						-- round decades down (e.g. 2010s)
+						yRound = math.floor(yDiv) * yFactor
+
+						if not raw then
+							prefix = i18n['datetime']['prefixes']['decade-period']
+							suffix = i18n['datetime']['suffixes']['decade-period']
+						end
+					end
+
+					if raw and sign < 0 then
+						-- if BCE then compensate for "counting backwards"
+						-- (e.g. -2019 for 2010s BCE, -2000 for 20th century BCE or -3000 for 3rd millennium BCE)
+						yRound = yRound + yFactor - 1
+					end
+				else
+					local yReFactor, yReDiv, yReRound
+
+					-- round to nearest for tens of thousands of years or more
+					yRound = math.floor(yDiv + 0.5)
+
+					if yRound == 0 then
+						if precision <= 2 and y ~= 0 then
+							yReFactor = 1e6
+							yReDiv = y / yReFactor
+							yReRound = math.floor(yReDiv + 0.5)
+
+							if yReDiv == yReRound then
+								-- change precision to millions of years only if we have a whole number of them
+								precision = 3
+								yFactor = yReFactor
+								yRound = yReRound
+							end
+						end
+
+						if yRound == 0 then
+							-- otherwise, take the unrounded (original) number of years
+							precision = 5
+							yFactor = 1
+							yRound = y
+							mayAddCalendar = true
+						end
+					end
+
+					if precision >= 1 and y ~= 0 then
+						yFull = yRound * yFactor
+
+						yReFactor = 1e9
+						yReDiv = yFull / yReFactor
+						yReRound = math.floor(yReDiv + 0.5)
+
+						if yReDiv == yReRound then
+							-- change precision to billions of years if we're in that range
+							precision = 0
+							yFactor = yReFactor
+							yRound = yReRound
+						else
+							yReFactor = 1e6
+							yReDiv = yFull / yReFactor
+							yReRound = math.floor(yReDiv + 0.5)
+
+							if yReDiv == yReRound then
+								-- change precision to millions of years if we're in that range
+								precision = 3
+								yFactor = yReFactor
+								yRound = yReRound
+							end
+						end
+					end
+
+					if not raw then
+						if precision == 3 then
+							suffix = i18n['datetime']['suffixes']['million-years']
+						elseif precision == 0 then
+							suffix = i18n['datetime']['suffixes']['billion-years']
+						else
+							yRound = yRound * yFactor
+							if yRound == 1 then
+								suffix = i18n['datetime']['suffixes']['year']
+							else
+								suffix = i18n['datetime']['suffixes']['years']
+							end
+						end
+					else
+						yRound = yRound * yFactor
+					end
+				end
+			else
+				yRound = y
+				mayAddCalendar = true
+			end
+
+			if mayAddCalendar then
+				calendarID = parseWikidataURL(datavalue['calendarmodel'])
+
+				if calendarID and calendarID == aliasesQ.prolepticJulianCalendar then
+					if not raw then
+						if link then
+							calendar = " ("..buildWikilink(i18n['datetime']['julian-calendar'], i18n['datetime']['julian'])..")"
+						else
+							calendar = " ("..i18n['datetime']['julian']..")"
+						end
+					else
+						calendar = "/"..i18n['datetime']['julian']
+					end
+				end
+			end
+
+			if not raw then
+				local ce = nil
+
+				if sign < 0 then
+					ce = i18n['datetime']['BCE']
+				elseif precision <= 5 then
+					ce = i18n['datetime']['CE']
+				end
+
+				if ce then
+					if link then
+						ce = buildWikilink(i18n['datetime']['common-era'], ce)
+					end
+					suffix = suffix .. " " .. ce
+				end
+
+				value = tostring(yRound)
+
+				if m then
+					dateStr = self.langObj:formatDate("F", "1-"..m.."-1")
+
+					if d then
+						if self.mdyDate then
+							dateStr = dateStr .. " " .. d .. ","
+						else
+							dateStr = d .. " " .. dateStr
+						end
+					end
+
+					value = dateStr .. " " .. value
+				end
+
+				value = prefix .. value .. suffix .. calendar
+			else
+				value = padZeros(yRound * sign, 4)
+
+				if m then
+					value = value .. "-" .. padZeros(m, 2)
+
+					if d then
+						value = value .. "-" .. padZeros(d, 2)
+					end
+				end
+
+				value = value .. calendar
+			end
+
+			return value
+		elseif datatype == 'globecoordinate' then
+			-- logic from https://github.com/DataValues/Geo (v4.0.1)
+
+			local precision, unitsPerDegree, numDigits, strFormat, value, globe
+			local latitude, latConv, latValue, latLink
+			local longitude, lonConv, lonValue, lonLink
+			local latDirection, latDirectionN, latDirectionS, latDirectionEN
+			local lonDirection, lonDirectionE, lonDirectionW, lonDirectionEN
+			local degSymbol, minSymbol, secSymbol, separator
+
+			local latDegrees = nil
+			local latMinutes = nil
+			local latSeconds = nil
+			local lonDegrees = nil
+			local lonMinutes = nil
+			local lonSeconds = nil
+
+			local latDegSym = ""
+			local latMinSym = ""
+			local latSecSym = ""
+			local lonDegSym = ""
+			local lonMinSym = ""
+			local lonSecSym = ""
+
+			local latDirectionEN_N = "N"
+			local latDirectionEN_S = "S"
+			local lonDirectionEN_E = "E"
+			local lonDirectionEN_W = "W"
+
+			if not raw then
+				latDirectionN = i18n['coord']['latitude-north']
+				latDirectionS = i18n['coord']['latitude-south']
+				lonDirectionE = i18n['coord']['longitude-east']
+				lonDirectionW = i18n['coord']['longitude-west']
+
+				degSymbol = i18n['coord']['degrees']
+				minSymbol = i18n['coord']['minutes']
+				secSymbol = i18n['coord']['seconds']
+				separator = i18n['coord']['separator']
+			else
+				latDirectionN = latDirectionEN_N
+				latDirectionS = latDirectionEN_S
+				lonDirectionE = lonDirectionEN_E
+				lonDirectionW = lonDirectionEN_W
+
+				degSymbol = "/"
+				minSymbol = "/"
+				secSymbol = "/"
+				separator = "/"
+			end
+
+			latitude = datavalue['latitude']
+			longitude = datavalue['longitude']
+
+			if latitude < 0 then
+				latDirection = latDirectionS
+				latDirectionEN = latDirectionEN_S
+				latitude = math.abs(latitude)
+			else
+				latDirection = latDirectionN
+				latDirectionEN = latDirectionEN_N
+			end
+
+			if longitude < 0 then
+				lonDirection = lonDirectionW
+				lonDirectionEN = lonDirectionEN_W
+				longitude = math.abs(longitude)
+			else
+				lonDirection = lonDirectionE
+				lonDirectionEN = lonDirectionEN_E
+			end
+
+			precision = datavalue['precision']
+
+			if not precision or precision <= 0 then
+				precision = 1 / 3600  -- precision not set (correctly), set to arcsecond
+			end
+
+			-- remove insignificant detail
+			latitude = math.floor(latitude / precision + 0.5) * precision
+			longitude = math.floor(longitude / precision + 0.5) * precision
+
+			if precision >= 1 - (1 / 60) and precision < 1 then
+				precision = 1
+			elseif precision >= (1 / 60) - (1 / 3600) and precision < (1 / 60) then
+				precision = 1 / 60
+			end
+
+			if precision >= 1 then
+				unitsPerDegree = 1
+			elseif precision >= (1 / 60)  then
+				unitsPerDegree = 60
+			else
+				unitsPerDegree = 3600
+			end
+
+			numDigits = math.ceil(-math.log10(unitsPerDegree * precision))
+
+			if numDigits <= 0 then
+				numDigits = tonumber("0")  -- for some reason, 'numDigits = 0' may actually store '-0', so parse from string instead
+			end
+
+			strFormat = "%." .. numDigits .. "f"
+
+			if precision >= 1 then
+				latDegrees = strFormat:format(latitude)
+				lonDegrees = strFormat:format(longitude)
+
+				if not raw then
+					latDegSym = replaceDecimalMark(latDegrees) .. degSymbol
+					lonDegSym = replaceDecimalMark(lonDegrees) .. degSymbol
+				else
+					latDegSym = latDegrees .. degSymbol
+					lonDegSym = lonDegrees .. degSymbol
+				end
+			else
+				latConv = math.floor(latitude * unitsPerDegree * 10^numDigits + 0.5) / 10^numDigits
+				lonConv = math.floor(longitude * unitsPerDegree * 10^numDigits + 0.5) / 10^numDigits
+
+				if precision >= (1 / 60) then
+					latMinutes = latConv
+					lonMinutes = lonConv
+				else
+					latSeconds = latConv
+					lonSeconds = lonConv
+
+					latMinutes = math.floor(latSeconds / 60)
+					lonMinutes = math.floor(lonSeconds / 60)
+
+					latSeconds = strFormat:format(latSeconds - (latMinutes * 60))
+					lonSeconds = strFormat:format(lonSeconds - (lonMinutes * 60))
+
+					if not raw then
+						latSecSym = replaceDecimalMark(latSeconds) .. secSymbol
+						lonSecSym = replaceDecimalMark(lonSeconds) .. secSymbol
+					else
+						latSecSym = latSeconds .. secSymbol
+						lonSecSym = lonSeconds .. secSymbol
+					end
+				end
+
+				latDegrees = math.floor(latMinutes / 60)
+				lonDegrees = math.floor(lonMinutes / 60)
+
+				latDegSym = latDegrees .. degSymbol
+				lonDegSym = lonDegrees .. degSymbol
+
+				latMinutes = latMinutes - (latDegrees * 60)
+				lonMinutes = lonMinutes - (lonDegrees * 60)
+
+				if precision >= (1 / 60) then
+					latMinutes = strFormat:format(latMinutes)
+					lonMinutes = strFormat:format(lonMinutes)
+
+					if not raw then
+						latMinSym = replaceDecimalMark(latMinutes) .. minSymbol
+						lonMinSym = replaceDecimalMark(lonMinutes) .. minSymbol
+					else
+						latMinSym = latMinutes .. minSymbol
+						lonMinSym = lonMinutes .. minSymbol
+					end
+				else
+					latMinSym = latMinutes .. minSymbol
+					lonMinSym = lonMinutes .. minSymbol
+				end
+			end
+
+			latValue = latDegSym .. latMinSym .. latSecSym .. latDirection
+			lonValue = lonDegSym .. lonMinSym .. lonSecSym .. lonDirection
+
+			value = latValue .. separator .. lonValue
+
+			if link then
+				globe = parseWikidataURL(datavalue['globe'])
+
+				if globe then
+					globe = mw.wikibase.getLabelByLang(globe, "en"):lower()
+				else
+					globe = "earth"
+				end
+
+				latLink = table.concat({latDegrees, latMinutes, latSeconds}, "_")
+				lonLink = table.concat({lonDegrees, lonMinutes, lonSeconds}, "_")
+
+				value = "[https://tools.wmflabs.org/geohack/geohack.php?language="..self.langCode.."&params="..latLink.."_"..latDirectionEN.."_"..lonLink.."_"..lonDirectionEN.."_globe:"..globe.." "..value.."]"
+			end
+
+			return value
+		elseif datatype == 'wikibase-entityid' then
+			local label
+			local itemID = datavalue['numeric-id']
+
+			if subtype == 'wikibase-item' then
+				itemID = "Q" .. itemID
+			elseif subtype == 'wikibase-property' then
+				itemID = "P" .. itemID
+			else
+				return '<strong class="error">' .. errorText('unknown-data-type', subtype) .. '</strong>'
+			end
+
+			label = self:getLabel(itemID, raw, link, short)
+
+			if label == "" then
+				label = nil
+			end
+
+			return label
+		else
+			return '<strong class="error">' .. errorText('unknown-data-type', datatype) .. '</strong>'
+		end
+	elseif snak.snaktype == 'somevalue' and not noSpecial then
+		if raw then
+			return " "  -- single space represents 'somevalue'
+		else
+			return i18n['values']['unknown']
+		end
+	elseif snak.snaktype == 'novalue' and not noSpecial then
+		if raw then
+			return ""  -- empty string represents 'novalue'
+		else
+			return i18n['values']['none']
+		end
+	else
+		return nil
+	end
+end
+
+function Config:getSingleRawQualifier(claim, qualifierID)
+	local qualifiers
+
+	if claim.qualifiers then qualifiers = claim.qualifiers[qualifierID] end
+
+	if qualifiers and qualifiers[1] then
+		return self:getValue(qualifiers[1], true)  -- raw = true
+	else
+		return nil
+	end
+end
+
+function Config:snakEqualsValue(snak, value)
+	local snakValue = self:getValue(snak, true)  -- raw = true
+
+	if snakValue and snak.snaktype == 'value' and snak.datavalue.type == 'wikibase-entityid' then value = value:upper() end
+
+	return snakValue == value
+end
+
+function Config:setRank(rank)
+	local rankPos
+
+	if rank == p.flags.best then
+		self.bestRank = true
+		self.flagBest = true  -- mark that 'best' flag was given
+		return
+	end
+
+	if rank:sub(1,9) == p.flags.preferred then
+		rankPos = 1
+	elseif rank:sub(1,6) == p.flags.normal then
+		rankPos = 2
+	elseif rank:sub(1,10) == p.flags.deprecated then
+		rankPos = 3
+	else
+		return
+	end
+
+	-- one of the rank flags was given, check if another one was given before
+	if not self.flagRank then
+		self.ranks = {false, false, false}  -- no other rank flag given before, so unset ranks
+		self.bestRank = self.flagBest       -- unsets bestRank only if 'best' flag was not given before
+		self.flagRank = true                -- mark that a rank flag was given
+	end
+
+	if rank:sub(-1) == "+" then
+		for i = rankPos, 1, -1 do
+			self.ranks[i] = true
+		end
+	elseif rank:sub(-1) == "-" then
+		for i = rankPos, #self.ranks do
+			self.ranks[i] = true
+		end
+	else
+		self.ranks[rankPos] = true
+	end
+end
+
+function Config:setPeriod(period)
+	local periodPos
+
+	if period == p.flags.future then
+		periodPos = 1
+	elseif period == p.flags.current then
+		periodPos = 2
+	elseif period == p.flags.former then
+		periodPos = 3
+	else
+		return
+	end
+
+	-- one of the period flags was given, check if another one was given before
+	if not self.flagPeriod then
+		self.periods = {false, false, false}  -- no other period flag given before, so unset periods
+		self.flagPeriod = true                -- mark that a period flag was given
+	end
+
+	self.periods[periodPos] = true
+end
+
+function Config:qualifierMatches(claim, id, value)
+	local qualifiers
+
+	if claim.qualifiers then qualifiers = claim.qualifiers[id] end
+	if qualifiers then
+		for _, v in pairs(qualifiers) do
+			if self:snakEqualsValue(v, value) then
+				return true
+			end
+		end
+	elseif value == "" then
+		-- if the qualifier is not present then treat it the same as the special value 'novalue'
+		return true
+	end
+
+	return false
+end
+
+function Config:rankMatches(rankPos)
+	if self.bestRank then
+		return (self.ranks[rankPos] and self.foundRank >= rankPos)
+	else
+		return self.ranks[rankPos]
+	end
+end
+
+function Config:timeMatches(claim)
+	local startTime = nil
+	local startTimeY = nil
+	local startTimeM = nil
+	local startTimeD = nil
+	local endTime = nil
+	local endTimeY = nil
+	local endTimeM = nil
+	local endTimeD = nil
+
+	if self.periods[1] and self.periods[2] and self.periods[3] then
+		-- any time
+		return true
+	end
+
+	startTime = self:getSingleRawQualifier(claim, aliasesP.startTime)
+	if startTime and startTime ~= "" and startTime ~= " " then
+		startTimeY, startTimeM, startTimeD = parseDate(startTime)
+	end
+
+	endTime = self:getSingleRawQualifier(claim, aliasesP.endTime)
+	if endTime and endTime ~= "" and endTime ~= " " then
+		endTimeY, endTimeM, endTimeD = parseDate(endTime)
+	end
+
+	if startTimeY ~= nil and endTimeY ~= nil and datePrecedesDate(endTimeY, endTimeM, endTimeD, startTimeY, startTimeM, startTimeD) then
+		-- invalidate end time if it precedes start time
+		endTimeY = nil
+		endTimeM = nil
+		endTimeD = nil
+	end
+
+	if self.periods[1] then
+		-- future
+		if startTimeY and datePrecedesDate(self.atDate[1], self.atDate[2], self.atDate[3], startTimeY, startTimeM, startTimeD) then
+			return true
+		end
+	end
+
+	if self.periods[2] then
+		-- current
+		if (startTimeY == nil or not datePrecedesDate(self.atDate[1], self.atDate[2], self.atDate[3], startTimeY, startTimeM, startTimeD)) and
+		   (endTimeY == nil or datePrecedesDate(self.atDate[1], self.atDate[2], self.atDate[3], endTimeY, endTimeM, endTimeD)) then
+			return true
+		end
+	end
+
+	if self.periods[3] then
+		-- former
+		if endTimeY and not datePrecedesDate(self.atDate[1], self.atDate[2], self.atDate[3], endTimeY, endTimeM, endTimeD) then
+			return true
+		end
+	end
+
+	return false
+end
+
+function Config:processFlag(flag)
+	if not flag then
+		return false
+	end
+
+	if flag == p.flags.linked then
+		self.curState.linked = true
+		return true
+	elseif flag == p.flags.raw then
+		self.curState.rawValue = true
+
+		if self.curState == self.states[parameters.reference] then
+			-- raw reference values end with periods and require a separator (other than none)
+			self.separators["sep%r"][1] = {" "}
+		end
+
+		return true
+	elseif flag == p.flags.short then
+		self.curState.shortName = true
+		return true
+	elseif flag == p.flags.multilanguage then
+		self.curState.anyLanguage = true
+		return true
+	elseif flag == p.flags.unit then
+		self.curState.unitOnly = true
+		return true
+	elseif flag == p.flags.mdy then
+		self.mdyDate = true
+		return true
+	elseif flag == p.flags.single then
+		self.singleClaim = true
+		return true
+	elseif flag == p.flags.sourced then
+		self.sourcedOnly = true
+		return true
+	elseif flag == p.flags.edit then
+		self.editable = true
+		return true
+	elseif flag == p.flags.editAtEnd then
+		self.editable = true
+		self.editAtEnd = true
+		return true
+	elseif flag == p.flags.best or flag:match('^'..p.flags.preferred..'[+-]?$') or flag:match('^'..p.flags.normal..'[+-]?$') or flag:match('^'..p.flags.deprecated..'[+-]?$') then
+		self:setRank(flag)
+		return true
+	elseif flag == p.flags.future or flag == p.flags.current or flag == p.flags.former then
+		self:setPeriod(flag)
+		return true
+	elseif flag == "" then
+		-- ignore empty flags and carry on
+		return true
+	else
+		return false
+	end
+end
+
+function Config:processFlagOrCommand(flag)
+	local param = ""
+
+	if not flag then
+		return false
+	end
+
+	if flag == p.claimCommands.property or flag == p.claimCommands.properties then
+		param = parameters.property
+	elseif flag == p.claimCommands.qualifier or flag == p.claimCommands.qualifiers then
+		self.states.qualifiersCount = self.states.qualifiersCount + 1
+		param = parameters.qualifier .. self.states.qualifiersCount
+		self.separators["sep"..param] = {copyTable(defaultSeparators["sep%q\\d"])}
+	elseif flag == p.claimCommands.reference or flag == p.claimCommands.references then
+		param = parameters.reference
+	else
+		return self:processFlag(flag)
+	end
+
+	if self.states[param] then
+		return false
+	end
+
+	-- create a new state for each command
+	self.states[param] = State:new(self, param)
+
+	-- use "%x" as the general parameter name
+	self.states[param].parsedFormat = parseFormat(parameters.general)  -- will be overwritten for param=="%p"
+
+	-- set the separator
+	self.states[param].separator = self.separators["sep"..param]  -- will be nil for param=="%p", which will be set separately
+
+	if flag == p.claimCommands.property or flag == p.claimCommands.qualifier or flag == p.claimCommands.reference then
+		self.states[param].singleValue = true
+	end
+
+	self.curState = self.states[param]
+
+	return true
+end
+
+function Config:processSeparators(args)
+	local sep
+
+	for i, v in pairs(self.separators) do
+		if args[i] then
+			sep = replaceSpecialChars(args[i])
+
+			if sep ~= "" then
+				self.separators[i][1] = {sep}
+			else
+				self.separators[i][1] = nil
+			end
+		end
+	end
+end
+
+function Config:setFormatAndSeparators(state, parsedFormat)
+	state.parsedFormat = parsedFormat
+	state.separator = self.separators["sep"]
+	state.movSeparator = self.separators["sep"..parameters.separator]
+	state.puncMark = self.separators["punc"]
+end
+
+-- determines if a claim has references by prefetching them from the claim using getReferences,
+-- which applies some filtering that determines if a reference is actually returned,
+-- and caches the references for later use
+function State:isSourced(claim)
+	self.conf.prefetchedRefs = self:getReferences(claim)
+	return (#self.conf.prefetchedRefs > 0)
+end
+
+function State:resetCaches()
+	-- any prefetched references of the previous claim must not be used
+	self.conf.prefetchedRefs = nil
+end
+
+function State:claimMatches(claim)
+	local matches, rankPos
+
+	-- first of all, reset any cached values used for the previous claim
+	self:resetCaches()
+
+	-- if a property value was given, check if it matches the claim's property value
+	if self.conf.propertyValue then
+		matches = self.conf:snakEqualsValue(claim.mainsnak, self.conf.propertyValue)
+	else
+		matches = true
+	end
+
+	-- if any qualifier values were given, check if each matches one of the claim's qualifier values
+	for i, v in pairs(self.conf.qualifierIDsAndValues) do
+		matches = (matches and self.conf:qualifierMatches(claim, i, v))
+	end
+
+	-- check if the claim's rank and time period match
+	rankPos = rankTable[claim.rank] or 4
+	matches = (matches and self.conf:rankMatches(rankPos) and self.conf:timeMatches(claim))
+
+	-- if only claims with references must be returned, check if this one has any
+	if self.conf.sourcedOnly then
+		matches = (matches and self:isSourced(claim))  -- prefetches and caches references
+	end
+
+	return matches, rankPos
+end
+
+function State:out()
+	local result  -- collection of arrays with value objects
+	local valuesArray  -- array with value objects
+	local sep = nil  -- value object
+	local out = {}  -- array with value objects
+
+	local function walk(formatTable, result)
+		local valuesArray = {}  -- array with value objects
+
+		for i, v in pairs(formatTable.req) do
+			if not result[i] or not result[i][1] then
+				-- we've got no result for a parameter that is required on this level,
+				-- so skip this level (and its children) by returning an empty result
+				return {}
+			end
+		end
+
+		for _, v in ipairs(formatTable) do
+			if v.param then
+				valuesArray = mergeArrays(valuesArray, result[v.str])
+			elseif v.str ~= "" then
+				valuesArray[#valuesArray + 1] = {v.str}
+			end
+
+			if v.child then
+				valuesArray = mergeArrays(valuesArray, walk(v.child, result))
+			end
+		end
+
+		return valuesArray
+	end
+
+	-- iterate through the results from back to front, so that we know when to add separators
+	for i = #self.results, 1, -1 do
+		result = self.results[i]
+
+		-- if there is already some output, then add the separators
+		if #out > 0 then
+			sep = self.separator[1]  -- fixed separator
+			result[parameters.separator] = {self.movSeparator[1]}  -- movable separator
+		else
+			sep = nil
+			result[parameters.separator] = {self.puncMark[1]}  -- optional punctuation mark
+		end
+
+		valuesArray = walk(self.parsedFormat, result)
+
+		if #valuesArray > 0 then
+			if sep then
+				valuesArray[#valuesArray + 1] = sep
+			end
+
+			out = mergeArrays(valuesArray, out)
+		end
+	end
+
+	-- reset state before next iteration
+	self.results = {}
+
+	return out
+end
+
+-- level 1 hook
+function State:getProperty(claim)
+	local value = {self:getValue(claim.mainsnak)}  -- create one value object
+
+	if #value > 0 then
+		return {value}  -- wrap the value object in an array and return it
+	else
+		return {}  -- return empty array if there was no value
+	end
+end
+
+-- level 1 hook
+function State:getQualifiers(claim, param)
+	local qualifiers
+
+	if claim.qualifiers then qualifiers = claim.qualifiers[self.conf.qualifierIDs[param]] end
+	if qualifiers then
+		-- iterate through claim's qualifier statements to collect their values;
+		-- return array with multiple value objects
+		return self.conf.states[param]:iterate(qualifiers, {[parameters.general] = hookNames[parameters.qualifier.."\\d"][2], count = 1})  -- pass qualifier state with level 2 hook
+	else
+		return {}  -- return empty array
+	end
+end
+
+-- level 2 hook
+function State:getQualifier(snak)
+	local value = {self:getValue(snak)}  -- create one value object
+
+	if #value > 0 then
+		return {value}  -- wrap the value object in an array and return it
+	else
+		return {}  -- return empty array if there was no value
+	end
+end
+
+-- level 1 hook
+function State:getAllQualifiers(claim, param, result, hooks)
+	local out = {}  -- array with value objects
+	local sep = self.conf.separators["sep"..parameters.qualifier][1]  -- value object
+
+	-- iterate through the output of the separate "qualifier(s)" commands
+	for i = 1, self.conf.states.qualifiersCount do
+
+		-- if a hook has not been called yet, call it now
+		if not result[parameters.qualifier..i] then
+			self:callHook(parameters.qualifier..i, hooks, claim, result)
+		end
+
+		-- if there is output for this particular "qualifier(s)" command, then add it
+		if result[parameters.qualifier..i] and result[parameters.qualifier..i][1] then
+
+			-- if there is already some output, then add the separator
+			if #out > 0 and sep then
+				out[#out + 1] = sep
+			end
+
+			out = mergeArrays(out, result[parameters.qualifier..i])
+		end
+	end
+
+	return out
+end
+
+-- level 1 hook
+function State:getReferences(claim)
+	if self.conf.prefetchedRefs then
+		-- return references that have been prefetched by isSourced
+		return self.conf.prefetchedRefs
+	end
+
+	if claim.references then
+		-- iterate through claim's reference statements to collect their values;
+		-- return array with multiple value objects
+		return self.conf.states[parameters.reference]:iterate(claim.references, {[parameters.general] = hookNames[parameters.reference][2], count = 1})  -- pass reference state with level 2 hook
+	else
+		return {}  -- return empty array
+	end
+end
+
+-- level 2 hook
+function State:getReference(statement)
+	local key, citeWeb, citeQ, label
+	local params = {}
+	local citeParams = {['web'] = {}, ['q'] = {}}
+	local citeMismatch = {}
+	local useCite = nil
+	local useParams = nil
+	local value = ""
+	local ref = {}
+
+	local version = 1  -- increment this each time the below logic is changed to avoid conflict errors
+
+	if statement.snaks then
+		-- don't include "imported from", which is added by a bot
+		if statement.snaks[aliasesP.importedFrom] then
+			statement.snaks[aliasesP.importedFrom] = nil
+		end
+
+		-- don't include "inferred from", which is added by a bot
+		if statement.snaks[aliasesP.inferredFrom] then
+			statement.snaks[aliasesP.inferredFrom] = nil
+		end
+
+		-- don't include "type of reference"
+		if statement.snaks[aliasesP.typeOfReference] then
+			statement.snaks[aliasesP.typeOfReference] = nil
+		end
+
+		-- don't include "image" to prevent littering
+		if statement.snaks[aliasesP.image] then
+			statement.snaks[aliasesP.image] = nil
+		end
+
+		-- don't include "language" if it is equal to the local one
+		if self:getReferenceDetail(statement.snaks, aliasesP.language) == self.conf.langName then
+			statement.snaks[aliasesP.language] = nil
+		end
+
+		-- retrieve all the parameters
+		for i in pairs(statement.snaks) do
+			label = ""
+
+			-- multiple authors may be given
+			if i == aliasesP.author then
+				params[i] = self:getReferenceDetails(statement.snaks, i, false, self.linked, true)  -- link = true/false, anyLang = true
+			else
+				params[i] = {self:getReferenceDetail(statement.snaks, i, false, (self.linked or (i == aliasesP.statedIn)) and (statement.snaks[i][1].datatype ~= 'url'), true)}  -- link = true/false, anyLang = true
+			end
+
+			if #params[i] == 0 then
+				params[i] = nil
+			else
+				if statement.snaks[i][1].datatype == 'external-id' then
+					key = "external-id"
+					label = self.conf:getLabel(i)
+
+					if label ~= "" then
+						label = label .. " "
+					end
+				else
+					key = i
+				end
+
+				-- add the parameter to each matching type of citation
+				for j in pairs(citeParams) do
+					-- do so if there was no mismatch with a previous parameter
+					if not citeMismatch[j] then
+						-- check if this parameter is not mismatching itself
+						if i18n['cite'][j][key] then
+							-- continue if an option is available in the corresponding cite template
+							if i18n['cite'][j][key] ~= "" then
+								citeParams[j][i18n['cite'][j][key]] = label .. params[i][1]
+
+								-- if there are multiple parameter values (authors), add those too
+								for k=2, #params[i] do
+									citeParams[j][i18n['cite'][j][key]..k] = label .. params[i][k]
+								end
+							end
+						else
+							citeMismatch[j] = true
+						end
+					end
+				end
+			end
+		end
+
+		-- get title of general template for citing web references
+		citeWeb = split(mw.wikibase.getSitelink(aliasesQ.citeWeb) or "", ":")[2]  -- split off namespace from front
+
+		-- get title of template that expands stated-in references into citations
+		citeQ = split(mw.wikibase.getSitelink(aliasesQ.citeQ) or "", ":")[2]  -- split off namespace from front
+
+		-- (1) use the general template for citing web references if there is a match and if at least both "reference URL" and "title" are present
+		if citeWeb and not citeMismatch['web'] and citeParams['web'][i18n['cite']['web'][aliasesP.referenceURL]] and citeParams['web'][i18n['cite']['web'][aliasesP.title]] then
+			useCite = citeWeb
+			useParams = citeParams['web']
+
+		-- (2) use the template that expands stated-in references into citations if there is a match and if at least "stated in" is present
+		elseif citeQ and not citeMismatch['q'] and citeParams['q'][i18n['cite']['q'][aliasesP.statedIn]] then
+			-- we need the raw "stated in" Q-identifier for the this template
+			citeParams['q'][i18n['cite']['q'][aliasesP.statedIn]] = self:getReferenceDetail(statement.snaks, aliasesP.statedIn, true)  -- raw = true
+
+			useCite = citeQ
+			useParams = citeParams['q']
+		end
+
+		if useCite and useParams then
+			-- if this module is being substituted then build a regular template call, otherwise expand the template
+			if mw.isSubsting() then
+				for i, v in pairs(useParams) do
+					value = value .. "|" .. i .. "=" .. v
+				end
+
+				value = "{{" .. useCite .. value .. "}}"
+			else
+				value = mw.getCurrentFrame():expandTemplate{title=useCite, args=useParams}
+			end
+
+		-- (3) else, do some default rendering of name-value pairs, but only if at least "stated in", "reference URL" or "title" is present
+		elseif params[aliasesP.statedIn] or params[aliasesP.referenceURL] or params[aliasesP.title] then
+			citeParams['default'] = {}
+
+			-- start by adding authors up front
+			if params[aliasesP.author] and #params[aliasesP.author] > 0 then
+				citeParams['default'][#citeParams['default'] + 1] = table.concat(params[aliasesP.author], " & ")
+			end
+
+			-- combine "reference URL" and "title" into one link if both are present
+			if params[aliasesP.referenceURL] and params[aliasesP.title] then
+				citeParams['default'][#citeParams['default'] + 1] = '[' .. params[aliasesP.referenceURL][1] .. ' "' .. params[aliasesP.title][1] .. '"]'
+			elseif params[aliasesP.referenceURL] then
+				citeParams['default'][#citeParams['default'] + 1] = params[aliasesP.referenceURL][1]
+			elseif params[aliasesP.title] then
+				citeParams['default'][#citeParams['default'] + 1] = '"' .. params[aliasesP.title][1] .. '"'
+			end
+
+			-- then add "stated in"
+			if params[aliasesP.statedIn] then
+				citeParams['default'][#citeParams['default'] + 1] = "''" .. params[aliasesP.statedIn][1] .. "''"
+			end
+
+			-- remove previously added parameters so that they won't be added a second time
+			params[aliasesP.author] = nil
+			params[aliasesP.referenceURL] = nil
+			params[aliasesP.title] = nil
+			params[aliasesP.statedIn] = nil
+
+			-- add the rest of the parameters
+			for i, v in pairs(params) do
+				i = self.conf:getLabel(i)
+
+				if i ~= "" then
+					citeParams['default'][#citeParams['default'] + 1] = i .. ": " .. v[1]
+				end
+			end
+
+			value = table.concat(citeParams['default'], "; ")
+
+			if value ~= "" then
+				value = value .. "."
+			end
+		end
+
+		if value ~= "" then
+			value = {value}  -- create one value object
+
+			if not self.rawValue then
+				-- this should become a <ref> tag, so save the reference's hash for later
+				value.refHash = "wikidata-" .. statement.hash .. "-v" .. (tonumber(i18n['cite']['version']) + version)
+			end
+
+			ref = {value}  -- wrap the value object in an array
+		end
+	end
+
+	return ref
+end
+
+-- gets a detail of one particular type for a reference
+function State:getReferenceDetail(snaks, dType, raw, link, anyLang)
+	local switchLang = anyLang
+	local value = nil
+
+	if not snaks[dType] then
+		return nil
+	end
+
+	-- if anyLang, first try the local language and otherwise any language
+	repeat
+		for _, v in ipairs(snaks[dType]) do
+			value = self.conf:getValue(v, raw, link, false, anyLang and not switchLang, false, true)  -- noSpecial = true
+
+			if value then
+				break
+			end
+		end
+
+		if value or not anyLang then
+			break
+		end
+
+		switchLang = not switchLang
+	until anyLang and switchLang
+
+	return value
+end
+
+-- gets the details of one particular type for a reference
+function State:getReferenceDetails(snaks, dType, raw, link, anyLang)
+	local values = {}
+
+	if not snaks[dType] then
+		return {}
+	end
+
+	for _, v in ipairs(snaks[dType]) do
+		-- if nil is returned then it will not be added to the table
+		values[#values + 1] = self.conf:getValue(v, raw, link, false, anyLang, false, true)  -- noSpecial = true
+	end
+
+	return values
+end
+
+-- level 1 hook
+function State:getAlias(object)
+	local value = object.value
+	local title = nil
+
+	if value and self.linked then
+		if self.conf.entityID:sub(1,1) == "Q" then
+			title = mw.wikibase.getSitelink(self.conf.entityID)
+		elseif self.conf.entityID:sub(1,1) == "P" then
+			title = "d:Property:" .. self.conf.entityID
+		end
+
+		if title then
+			value = buildWikilink(title, value)
+		end
+	end
+
+	value = {value}  -- create one value object
+
+	if #value > 0 then
+		return {value}  -- wrap the value object in an array and return it
+	else
+		return {}  -- return empty array if there was no value
+	end
+end
+
+-- level 1 hook
+function State:getBadge(value)
+	value = self.conf:getLabel(value, self.rawValue, self.linked, self.shortName)
+
+	if value == "" then
+		value = nil
+	end
+
+	value = {value}  -- create one value object
+
+	if #value > 0 then
+		return {value}  -- wrap the value object in an array and return it
+	else
+		return {}  -- return empty array if there was no value
+	end
+end
+
+function State:callHook(param, hooks, statement, result)
+	local valuesArray, refHash
+
+	-- call a parameter's hook if it has been defined and if it has not been called before
+	if not result[param] and hooks[param] then
+		valuesArray = self[hooks[param]](self, statement, param, result, hooks)  -- array with value objects
+
+		-- add to the result
+		if #valuesArray > 0 then
+			result[param] = valuesArray
+			result.count = result.count + 1
+		else
+			result[param] = {}  -- an empty array to indicate that we've tried this hook already
+			return true  -- miss == true
+		end
+	end
+
+	return false
+end
+
+-- iterate through claims, claim's qualifiers or claim's references to collect values
+function State:iterate(statements, hooks, matchHook)
+	matchHook = matchHook or alwaysTrue
+
+	local matches = false
+	local rankPos = nil
+	local result, gotRequired
+
+	for _, v in ipairs(statements) do
+		-- rankPos will be nil for non-claim statements (e.g. qualifiers, references, etc.)
+		matches, rankPos = matchHook(self, v)
+
+		if matches then
+			result = {count = 0}  -- collection of arrays with value objects
+
+			local function walk(formatTable)
+				local miss
+
+				for i2, v2 in pairs(formatTable.req) do
+					-- call a hook, adding its return value to the result
+					miss = self:callHook(i2, hooks, v, result)
+
+					if miss then
+						-- we miss a required value for this level, so return false
+						return false
+					end
+
+					if result.count == hooks.count then
+						-- we're done if all hooks have been called;
+						-- returning at this point breaks the loop
+						return true
+					end
+				end
+
+				for _, v2 in ipairs(formatTable) do
+					if result.count == hooks.count then
+						-- we're done if all hooks have been called;
+						-- returning at this point prevents further childs from being processed
+						return true
+					end
+
+					if v2.child then
+						walk(v2.child)
+					end
+				end
+
+				return true
+			end
+			gotRequired = walk(self.parsedFormat)
+
+			-- only append the result if we got values for all required parameters on the root level
+			if gotRequired then
+				-- if we have a rankPos (only with matchHook() for complete claims), then update the foundRank
+				if rankPos and self.conf.foundRank > rankPos then
+					self.conf.foundRank = rankPos
+				end
+
+				-- append the result
+				self.results[#self.results + 1] = result
+
+				-- break if we only need a single value
+				if self.singleValue then
+					break
+				end
+			end
+		end
+	end
+
+	return self:out()
+end
+
+local function getEntityId(arg, eid, page, allowOmitPropPrefix)
+	local id = nil
+	local prop = nil
+
+	if arg then
+		if arg:sub(1,1) == ":" then
+			page = arg
+			eid = nil
+		elseif arg:sub(1,1):upper() == "Q" or arg:sub(1,9):lower() == "property:" or allowOmitPropPrefix then
+			eid = arg
+			page = nil
+		else
+			prop = arg
+		end
+	end
+
+	if eid then
+		if eid:sub(1,9):lower() == "property:" then
+			id = replaceAlias(mw.text.trim(eid:sub(10)))
+
+			if id:sub(1,1):upper() ~= "P" then
+				id = ""
+			end
+		else
+			id = replaceAlias(eid)
+		end
+	elseif page then
+		if page:sub(1,1) == ":" then
+			page = mw.text.trim(page:sub(2))
+		end
+
+		id = mw.wikibase.getEntityIdForTitle(page) or ""
+	end
+
+	if not id then
+		id = mw.wikibase.getEntityIdForCurrentPage() or ""
+	end
+
+	id = id:upper()
+
+	if not mw.wikibase.isValidEntityId(id) then
+		id = ""
+	end
+
+	return id, prop
+end
+
+local function nextArg(args)
+	local arg = args[args.pointer]
+
+	if arg then
+		args.pointer = args.pointer + 1
+		return mw.text.trim(arg)
+	else
+		return nil
+	end
+end
+
+local function claimCommand(args, funcName)
+	local cfg = Config:new()
+	cfg:processFlagOrCommand(funcName)  -- process first command (== function name)
+
+	local lastArg, parsedFormat, formatParams, claims, value
+	local hooks = {count = 0}
+
+	-- set the date if given;
+	-- must come BEFORE processing the flags
+	if args[p.args.date] then
+		cfg.atDate = {parseDate(args[p.args.date])}
+		cfg.periods = {false, true, false}  -- change default time constraint to 'current'
+	end
+
+	-- process flags and commands
+	repeat
+		lastArg = nextArg(args)
+	until not cfg:processFlagOrCommand(lastArg)
+
+	-- get the entity ID from either the positional argument, the eid argument or the page argument
+	cfg.entityID, cfg.propertyID = getEntityId(lastArg, args[p.args.eid], args[p.args.page])
+
+	if cfg.entityID == "" then
+		return ""  -- we cannot continue without a valid entity ID
+	end
+
+	cfg.entity = mw.wikibase.getEntity(cfg.entityID)
+
+	if not cfg.propertyID then
+		cfg.propertyID = nextArg(args)
+	end
+
+	cfg.propertyID = replaceAlias(cfg.propertyID)
+
+	if not cfg.entity or not cfg.propertyID then
+		return ""  -- we cannot continue without an entity or a property ID
+	end
+
+	cfg.propertyID = cfg.propertyID:upper()
+
+	if not cfg.entity.claims or not cfg.entity.claims[cfg.propertyID] then
+		return ""  -- there is no use to continue without any claims
+	end
+
+	claims = cfg.entity.claims[cfg.propertyID]
+
+	if cfg.states.qualifiersCount > 0 then
+		-- do further processing if "qualifier(s)" command was given
+
+		if #args - args.pointer + 1 > cfg.states.qualifiersCount then
+			-- claim ID or literal value has been given
+
+			cfg.propertyValue = nextArg(args)
+		end
+
+		for i = 1, cfg.states.qualifiersCount do
+			-- check if given qualifier ID is an alias and add it
+			cfg.qualifierIDs[parameters.qualifier..i] = replaceAlias(nextArg(args) or ""):upper()
+		end
+	elseif cfg.states[parameters.reference] then
+		-- do further processing if "reference(s)" command was given
+
+		cfg.propertyValue = nextArg(args)
+	end
+
+	-- check for special property value 'somevalue' or 'novalue'
+	if cfg.propertyValue then
+		cfg.propertyValue = replaceSpecialChars(cfg.propertyValue)
+
+		if cfg.propertyValue ~= "" and mw.text.trim(cfg.propertyValue) == "" then
+			cfg.propertyValue = " "  -- single space represents 'somevalue', whereas empty string represents 'novalue'
+		else
+			cfg.propertyValue = mw.text.trim(cfg.propertyValue)
+		end
+	end
+
+	-- parse the desired format, or choose an appropriate format
+	if args["format"] then
+		parsedFormat, formatParams = parseFormat(args["format"])
+	elseif cfg.states.qualifiersCount > 0 then  -- "qualifier(s)" command given
+		if cfg.states[parameters.property] then  -- "propert(y|ies)" command given
+			parsedFormat, formatParams = parseFormat(formats.propertyWithQualifier)
+		else
+			parsedFormat, formatParams = parseFormat(formats.qualifier)
+		end
+	elseif cfg.states[parameters.property] then  -- "propert(y|ies)" command given
+		parsedFormat, formatParams = parseFormat(formats.property)
+	else  -- "reference(s)" command given
+		parsedFormat, formatParams = parseFormat(formats.reference)
+	end
+
+	-- if a "qualifier(s)" command and no "propert(y|ies)" command has been given, make the movable separator a semicolon
+	if cfg.states.qualifiersCount > 0 and not cfg.states[parameters.property] then
+		cfg.separators["sep"..parameters.separator][1] = {";"}
+	end
+
+	-- if only "reference(s)" has been given, set the default separator to none (except when raw)
+	if cfg.states[parameters.reference] and not cfg.states[parameters.property] and cfg.states.qualifiersCount == 0
+	   and not cfg.states[parameters.reference].rawValue then
+		cfg.separators["sep"][1] = nil
+	end
+
+	-- if exactly one "qualifier(s)" command has been given, make "sep%q" point to "sep%q1" to make them equivalent
+	if cfg.states.qualifiersCount == 1 then
+		cfg.separators["sep"..parameters.qualifier] = cfg.separators["sep"..parameters.qualifier.."1"]
+	end
+
+	-- process overridden separator values;
+	-- must come AFTER tweaking the default separators
+	cfg:processSeparators(args)
+
+	-- define the hooks that should be called (getProperty, getQualifiers, getReferences);
+	-- only define a hook if both its command ("propert(y|ies)", "reference(s)", "qualifier(s)") and its parameter ("%p", "%r", "%q1", "%q2", "%q3") have been given
+	for i, v in pairs(cfg.states) do
+		-- e.g. 'formatParams["%q1"] or formatParams["%q"]' to define hook even if "%q1" was not defined to be able to build a complete value for "%q"
+		if formatParams[i] or formatParams[i:sub(1, 2)] then
+			hooks[i] = getHookName(i, 1)
+			hooks.count = hooks.count + 1
+		end
+	end
+
+	-- the "%q" parameter is not attached to a state, but is a collection of the results of multiple states (attached to "%q1", "%q2", "%q3", ...);
+	-- so if this parameter is given then this hook must be defined separately, but only if at least one "qualifier(s)" command has been given
+	if formatParams[parameters.qualifier] and cfg.states.qualifiersCount > 0 then
+		hooks[parameters.qualifier] = getHookName(parameters.qualifier, 1)
+		hooks.count = hooks.count + 1
+	end
+
+	-- create a state for "properties" if it doesn't exist yet, which will be used as a base configuration for each claim iteration;
+	-- must come AFTER defining the hooks
+	if not cfg.states[parameters.property] then
+		cfg.states[parameters.property] = State:new(cfg, parameters.property)
+
+		-- if the "single" flag has been given then this state should be equivalent to "property" (singular)
+		if cfg.singleClaim then
+			cfg.states[parameters.property].singleValue = true
+		end
+	end
+
+	-- if the "sourced" flag has been given then create a state for "reference" if it doesn't exist yet, using default values,
+	-- which must exist in order to be able to determine if a claim has any references;
+	-- must come AFTER defining the hooks
+	if cfg.sourcedOnly and not cfg.states[parameters.reference] then
+		cfg:processFlagOrCommand(p.claimCommands.reference)  -- use singular "reference" to minimize overhead
+	end
+
+	-- set the parsed format and the separators (and optional punctuation mark);
+	-- must come AFTER creating the additonal states
+	cfg:setFormatAndSeparators(cfg.states[parameters.property], parsedFormat)
+
+	-- process qualifier matching values, analogous to cfg.propertyValue
+	for i, v in pairs(args) do
+		i = tostring(i)
+
+		if i:match('^[Pp]%d+$') or aliasesP[i] then
+			v = replaceSpecialChars(v)
+
+			-- check for special qualifier value 'somevalue'
+			if v ~= "" and mw.text.trim(v) == "" then
+				v = " "  -- single space represents 'somevalue'
+			end
+
+			cfg.qualifierIDsAndValues[replaceAlias(i):upper()] = v
+		end
+	end
+
+	-- first sort the claims on rank to pre-define the order of output (preferred first, then normal, then deprecated)
+	claims = sortOnRank(claims)
+
+	-- then iterate through the claims to collect values
+	value = cfg:concatValues(cfg.states[parameters.property]:iterate(claims, hooks, State.claimMatches))  -- pass property state with level 1 hooks and matchHook
+
+	-- if desired, add a clickable icon that may be used to edit the returned values on Wikidata
+	if cfg.editable and value ~= "" then
+		value = value .. cfg:getEditIcon()
+	end
+
+	return value
+end
+
+local function generalCommand(args, funcName)
+	local cfg = Config:new()
+	cfg.curState = State:new(cfg)
+
+	local lastArg
+	local value = nil
+
+	repeat
+		lastArg = nextArg(args)
+	until not cfg:processFlag(lastArg)
+
+	-- get the entity ID from either the positional argument, the eid argument or the page argument
+	cfg.entityID = getEntityId(lastArg, args[p.args.eid], args[p.args.page], true)
+
+	if cfg.entityID == "" or not mw.wikibase.entityExists(cfg.entityID) then
+		return ""  -- we cannot continue without an entity
+	end
+
+	-- serve according to the given command
+	if funcName == p.generalCommands.label then
+		value = cfg:getLabel(cfg.entityID, cfg.curState.rawValue, cfg.curState.linked, cfg.curState.shortName)
+	elseif funcName == p.generalCommands.title then
+		cfg.inSitelinks = true
+
+		if cfg.entityID:sub(1,1) == "Q" then
+			value = mw.wikibase.getSitelink(cfg.entityID)
+		end
+
+		if cfg.curState.linked and value then
+			value = buildWikilink(value)
+		end
+	elseif funcName == p.generalCommands.description then
+		value = mw.wikibase.getDescription(cfg.entityID)
+	else
+		local parsedFormat, formatParams
+		local hooks = {count = 0}
+
+		cfg.entity = mw.wikibase.getEntity(cfg.entityID)
+
+		if funcName == p.generalCommands.alias or funcName == p.generalCommands.badge then
+			cfg.curState.singleValue = true
+		end
+
+		if funcName == p.generalCommands.alias or funcName == p.generalCommands.aliases then
+			if not cfg.entity.aliases or not cfg.entity.aliases[cfg.langCode] then
+				return ""  -- there is no use to continue without any aliasses
+			end
+
+			local aliases = cfg.entity.aliases[cfg.langCode]
+
+			-- parse the desired format, or parse the default aliases format
+			if args["format"] then
+				parsedFormat, formatParams = parseFormat(args["format"])
+			else
+				parsedFormat, formatParams = parseFormat(formats.alias)
+			end
+
+			-- process overridden separator values;
+			-- must come AFTER tweaking the default separators
+			cfg:processSeparators(args)
+
+			-- define the hook that should be called (getAlias);
+			-- only define the hook if the parameter ("%a") has been given
+			if formatParams[parameters.alias] then
+				hooks[parameters.alias] = getHookName(parameters.alias, 1)
+				hooks.count = hooks.count + 1
+			end
+
+			-- set the parsed format and the separators (and optional punctuation mark)
+			cfg:setFormatAndSeparators(cfg.curState, parsedFormat)
+
+			-- iterate to collect values
+			value = cfg:concatValues(cfg.curState:iterate(aliases, hooks))
+		elseif funcName == p.generalCommands.badge or funcName == p.generalCommands.badges then
+			if not cfg.entity.sitelinks or not cfg.entity.sitelinks[cfg.siteID] or not cfg.entity.sitelinks[cfg.siteID].badges then
+				return ""  -- there is no use to continue without any badges
+			end
+
+			local badges = cfg.entity.sitelinks[cfg.siteID].badges
+
+			cfg.inSitelinks = true
+
+			-- parse the desired format, or parse the default aliases format
+			if args["format"] then
+				parsedFormat, formatParams = parseFormat(args["format"])
+			else
+				parsedFormat, formatParams = parseFormat(formats.badge)
+			end
+
+			-- process overridden separator values;
+			-- must come AFTER tweaking the default separators
+			cfg:processSeparators(args)
+
+			-- define the hook that should be called (getBadge);
+			-- only define the hook if the parameter ("%b") has been given
+			if formatParams[parameters.badge] then
+				hooks[parameters.badge] = getHookName(parameters.badge, 1)
+				hooks.count = hooks.count + 1
+			end
+
+			-- set the parsed format and the separators (and optional punctuation mark)
+			cfg:setFormatAndSeparators(cfg.curState, parsedFormat)
+
+			-- iterate to collect values
+			value = cfg:concatValues(cfg.curState:iterate(badges, hooks))
+		end
+	end
+
+	value = value or ""
+
+	if cfg.editable and value ~= "" then
+		-- if desired, add a clickable icon that may be used to edit the returned value on Wikidata
+		value = value .. cfg:getEditIcon()
+	end
+
+	return value
+end
+
+-- modules that include this module should call the functions with an underscore prepended, e.g.: p._property(args)
+local function establishCommands(commandList, commandFunc)
+	for _, commandName in pairs(commandList) do
+		local function wikitextWrapper(frame)
+			local args = copyTable(frame.args)
+			args.pointer = 1
+			loadI18n(aliasesP, frame)
+			return commandFunc(args, commandName)
+		end
+		p[commandName] = wikitextWrapper
+
+		local function luaWrapper(args)
+			args = copyTable(args)
+			args.pointer = 1
+			loadI18n(aliasesP)
+			return commandFunc(args, commandName)
+		end
+		p["_" .. commandName] = luaWrapper
+	end
+end
+
+establishCommands(p.claimCommands, claimCommand)
+establishCommands(p.generalCommands, generalCommand)
+
+-- main function that is supposed to be used by wrapper templates
+function p.main(frame)
+	if not mw.wikibase then return nil end
+
+	local f, args
+
+	loadI18n(aliasesP, frame)
+
+	-- get the parent frame to take the arguments that were passed to the wrapper template
+	frame = frame:getParent() or frame
+
+	if not frame.args[1] then
+		throwError("no-function-specified")
+	end
+
+	f = mw.text.trim(frame.args[1])
+
+	if f == "main" then
+		throwError("main-called-twice")
+	end
+
+	assert(p["_"..f], errorText('no-such-function', f))
+
+	-- copy arguments from immutable to mutable table
+	args = copyTable(frame.args)
+
+	-- remove the function name from the list
+	table.remove(args, 1)
+
+	return p["_"..f](args)
+end
+
+return p

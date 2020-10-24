@@ -1,0 +1,1 @@
+return require('Module:Choose random TAFI')

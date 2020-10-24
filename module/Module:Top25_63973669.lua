@@ -1,0 +1,1 @@
+return require('Module:Top 25 report')

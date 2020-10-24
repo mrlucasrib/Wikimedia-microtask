@@ -1,0 +1,1 @@
+return require('Module:Spellnum per MOS')

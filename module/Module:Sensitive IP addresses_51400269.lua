@@ -1,0 +1,1 @@
+return require('Module:Sensitive IP addresses/API')
